@@ -1,295 +1,435 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import os
+import requests
 from datetime import datetime
 
-# -----------------------------------------------------------------------------
-# 1. APP CONFIGURATION & STYLING
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Falkenherz HR Dashboard", layout="wide", page_icon="🏢")
+# ==============================================================================
+# 1. APP CONFIGURATION & THEME
+# ==============================================================================
+st.set_page_config(
+    page_title="Falkenherz HR Dashboard", 
+    layout="wide", 
+    page_icon="FHZ-Logo-2.png",
+    initial_sidebar_state="expanded"
+)
 
-st.markdown("""
+# --- COLOR PALETTE ---
+PRIMARY = "#2E86C1"    # Falkenherz Blue
+SECONDARY = "#2ECC71"  # Success Green
+DANGER = "#E74C3C"     # Red for Exits
+TEXT_COLOR = "#1F2937" 
+CARD_BG = "#FFFFFF"
+BG_COLOR = "#F4F6F9"
+
+# --- LOTTIE ANIMATION LOADER ---
+try:
+    from streamlit_lottie import st_lottie
+    @st.cache_data(ttl=86400) 
+    def load_lottieurl(url: str):
+        try:
+            r = requests.get(url, timeout=5)
+            if r.status_code != 200: return None
+            return r.json()
+        except: return None
+except ImportError:
+    def st_lottie(animation_json, height=200, key=None):
+        pass 
+    def load_lottieurl(url): return None
+
+lottie_hr = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_5tl1xxnz.json") 
+lottie_hiring = load_lottieurl("https://assets9.lottiefiles.com/packages/lf20_w51pcehl.json") 
+lottie_move = load_lottieurl("https://assets2.lottiefiles.com/packages/lf20_hX7y8C.json") 
+
+# --- ADVANCED CSS ---
+st.markdown(f"""
     <style>
-    .main { background-color: #f4f6f9; }
-    html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    div[data-testid="metric-container"] {
-        background-color: #ffffff;
+    .stApp {{ background-color: {BG_COLOR}; font-family: 'Inter', sans-serif; }}
+    h1, h2, h3, h4, h5, p, span, div, label {{ color: {TEXT_COLOR} !important; }}
+    
+    header[data-testid="stHeader"] {{
+        background-color: #FFFFFF !important;
+        border-bottom: 1px solid #E5E7EB;
+    }}
+    
+    div[data-testid="metric-container"] {{
+        background-color: {CARD_BG};
         padding: 15px;
         border-radius: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        border-left: 5px solid #2E86C1;
-    }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #ffffff;
-        border-radius: 5px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
+        border: 1px solid #E5E7EB;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        border-left: 5px solid {PRIMARY};
+    }}
+    div[data-testid="stMetricValue"] {{ color: {PRIMARY} !important; }}
+    
+    .chart-box {{
+        background-color: {CARD_BG};
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.03);
+        margin-bottom: 20px;
+        border: 1px solid #E5E7EB;
+    }}
+    
+    [data-testid="stSidebar"] {{
+        background-color: #FFFFFF;
+        border-right: 1px solid #E5E7EB;
+    }}
     </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 2. ROBUST DATA LOADER
-# -----------------------------------------------------------------------------
+# ==============================================================================
+# 2. DATA ENGINE
+# ==============================================================================
 @st.cache_data
-def load_all_data():
+def load_data():
     data = {
-        "active": pd.DataFrame(),
-        "inactive": pd.DataFrame(),
-        "recruitment": pd.DataFrame(),
-        "performance": pd.DataFrame(),
-        "leave": pd.DataFrame()
+        "active": pd.DataFrame(), "inactive": pd.DataFrame(),
+        "recruitment": pd.DataFrame(), "performance": pd.DataFrame(), "leave": pd.DataFrame()
     }
     
     master_file = "Employee Master Sheet - Lahore Office.xlsx"
-    
     if os.path.exists(master_file):
         try:
-            # --- A. ACTIVE STAFF ---
-            # Smart Search for Header Row
+            # Active Staff
             df_temp = pd.read_excel(master_file, sheet_name="Active Staff", header=None, nrows=15)
             header_idx = None
             for i, row in df_temp.iterrows():
-                row_str = row.astype(str).values.tolist()
-                if "Employee Number" in row_str and "Name" in row_str:
-                    header_idx = i
-                    break
+                if "Employee Number" in row.astype(str).values.tolist() and "Name" in row.astype(str).values.tolist():
+                    header_idx = i; break
             
             if header_idx is not None:
                 df_act = pd.read_excel(master_file, sheet_name="Active Staff", header=header_idx)
-                # Cleaning
                 df_act = df_act[df_act['Name'].notna()]
                 df_act = df_act[df_act['Employee Number'] != 'Employee Number']
-                
-                # Normalize Columns
-                if 'Business Unit' in df_act.columns: 
-                    df_act['Business Unit'] = df_act['Business Unit'].fillna('Unassigned')
-                if 'Reporting To' in df_act.columns: 
-                    df_act['Reporting To'] = df_act['Reporting To'].fillna('Direct to CEO')
-                if 'Joining Date' in df_act.columns: 
-                    df_act['Joining Date'] = pd.to_datetime(df_act['Joining Date'], errors='coerce')
-                
+                if 'Business Unit' in df_act.columns: df_act['Business Unit'].fillna('Unassigned', inplace=True)
+                if 'Reporting To' in df_act.columns: df_act['Reporting To'].fillna('Direct to CEO', inplace=True)
+                if 'Joining Date' in df_act.columns: df_act['Joining Date'] = pd.to_datetime(df_act['Joining Date'], errors='coerce')
                 data["active"] = df_act
 
-            # --- B. INACTIVE STAFF ---
+            # Inactive Staff
             df_inact = pd.read_excel(master_file, sheet_name="Inactive Staff", header=0)
-            if 'Exit Date' in df_inact.columns: 
-                df_inact['Exit Date'] = pd.to_datetime(df_inact['Exit Date'], errors='coerce')
+            if 'Exit Date' in df_inact.columns: df_inact['Exit Date'] = pd.to_datetime(df_inact['Exit Date'], errors='coerce')
             data["inactive"] = df_inact
-            
-        except Exception as e:
-            st.error(f"Error loading Master File: {e}")
+        except: pass
 
-    # --- C. RECRUITMENT ---
+    # Recruitment
     rec_file = "Hirings Requests UAE & PK.xlsx"
     if os.path.exists(rec_file):
         try:
             df_rec = pd.read_excel(rec_file, sheet_name="Progress")
-            # Funnel Logic
-            def get_stage(status_text):
-                text = str(status_text).lower()
-                if "join" in text or "hired" in text: return "Hired"
-                if "offer" in text: return "Offer Extended"
-                if "interview" in text: return "Interview"
-                if "shortlist" in text: return "Shortlisted"
-                return "Applied/In Process"
-            
-            if 'Standing' in df_rec.columns:
-                df_rec['Funnel Stage'] = df_rec['Standing'].apply(get_stage)
+            def get_stage(x):
+                s = str(x).lower()
+                if "join" in s or "hired" in s: return "Hired"
+                if "offer" in s: return "Offer Extended"
+                if "interview" in s: return "Interview"
+                if "shortlist" in s: return "Shortlisted"
+                return "Applied"
+            if 'Standing' in df_rec.columns: df_rec['Funnel Stage'] = df_rec['Standing'].apply(get_stage)
             data["recruitment"] = df_rec
         except: pass
 
-    # --- D. PERFORMANCE ---
+    # Performance
     perf_file = "Increment - Lahore Office _ Apr - Sep 25.xlsx"
     if os.path.exists(perf_file):
         try:
             df_perf = pd.read_excel(perf_file, sheet_name="Evaluation Data")
-            score_col = 'Total Points (Out of 100)'
-            if score_col in df_perf.columns:
-                df_perf[score_col] = pd.to_numeric(df_perf[score_col], errors='coerce')
-                def classify(score):
-                    if pd.isna(score): return "Pending"
-                    if score >= 85: return "High Performer"
-                    elif score < 70: return "Low Performer"
-                    else: return "Average"
-                df_perf['Category'] = df_perf[score_col].apply(classify)
+            if 'Total Points (Out of 100)' in df_perf.columns:
+                df_perf['Total Points (Out of 100)'] = pd.to_numeric(df_perf['Total Points (Out of 100)'], errors='coerce')
+                df_perf['Category'] = df_perf['Total Points (Out of 100)'].apply(lambda x: "High Performer" if x>=85 else ("Low Performer" if x<70 else "Average"))
                 data["performance"] = df_perf
         except: pass
 
-    # --- E. LEAVE MANAGEMENT ---
+    # Leave
     leave_file = "Leave Record - 2025.xlsx"
     if os.path.exists(leave_file):
         try:
-            # Multi-header logic
             df_leave = pd.read_excel(leave_file, sheet_name="Summary", header=1)
-            
-            if 'Employee Name' not in df_leave.columns:
-                df_leave.rename(columns={df_leave.columns[1]: 'Employee Name'}, inplace=True)
-            
+            if 'Employee Name' not in df_leave.columns: df_leave.rename(columns={df_leave.columns[1]: 'Employee Name'}, inplace=True)
             df_leave = df_leave[df_leave['Employee Name'].notna()]
-
-            # Calculate Total Availed (look for columns ending in .1 which signify Availed in this format)
             availed_cols = [c for c in df_leave.columns if str(c).endswith('.1')]
-            if availed_cols:
-                df_leave['Total Availed'] = df_leave[availed_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1)
-            else:
-                df_leave['Total Availed'] = 0
-            
+            df_leave['Total Availed'] = df_leave[availed_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1) if availed_cols else 0
             data["leave"] = df_leave
         except: pass
 
     return data
 
-# Load Data Once
-datasets = load_all_data()
-df_active = datasets["active"]
-df_inactive = datasets["inactive"]
-df_rec = datasets["recruitment"]
-df_perf = datasets["performance"]
-df_leave = datasets["leave"]
+datasets = load_data()
+df_active, df_inactive = datasets["active"], datasets["inactive"]
+df_rec, df_perf, df_leave = datasets["recruitment"], datasets["performance"], datasets["leave"]
 
-# -----------------------------------------------------------------------------
-# 3. SIDEBAR BRANDING & NAVIGATION
-# -----------------------------------------------------------------------------
+# ==============================================================================
+# 3. SIDEBAR BRANDING
+# ==============================================================================
 with st.sidebar:
-    # --- BRANDING SECTION ---
-    # Replace these URLs with local file paths (e.g., "logo.png")
     st.image("FHZ-Logo-2.png", use_container_width=True)
-    
-    st.markdown("### Ventures")
-    c1, c2, c3 = st.columns(3)
-    c1.image("vertical-logo-light-background.png", caption="Voltro")
-    c2.image("Untitled-2-01 - Copy - Copy-1 (2).png", caption="FAMS")
-    c3.image("logo final-01-01 - Copy.png", caption="JetClass")
-    
-    st.markdown("---")
-    
-    # --- NAVIGATION MENU ---
-    menu = st.radio("Main Menu", [
-        "Dashboard Overview", 
-        "Leave Management",
+    st.markdown("### Executive Dashboard")
+    menu = st.radio("Navigate", [
+        "Overview",
+        "Recruitment Pipeline",
+        "Employee Movement", 
         "Organization Structure",
-        "Employee Movement",
-        "Recruitment Tracking",
-        "Performance Management",
-        "Employee Master File",
-        "Policies & Documentation"
+        "Performance & Leave",
+        "Policies & Docs"
     ])
-    
     st.markdown("---")
-    st.caption("Falkenherz Group • HR Dept")
+    st.caption("Ventures")
+    c1, c2, c3 = st.columns(3)
+    with c1: st.image("logo final-01-01 - Copy.png", use_container_width=True)
+    with c2: st.image("vertical-logo-light-background.png", use_container_width=True)
+    with c3: st.image("Untitled-2-01 - Copy - Copy-1 (2).png", use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# 4. MODULE: DASHBOARD OVERVIEW (Req 1-4)
-# -----------------------------------------------------------------------------
-if menu == "Dashboard Overview":
-    st.title("📊 HR Executive Overview")
+# ==============================================================================
+# 4. MODULES
+# ==============================================================================
+
+# --- OVERVIEW ---
+if menu == "Overview":
+    c1, c2 = st.columns([3, 1])
+    with c1: st.title("Dashboard Overview")
+    with c2: 
+        if lottie_hr: st_lottie(lottie_hr, height=100, key="hr")
     
     if not df_active.empty:
-        # Metrics
         total = len(df_active) + len(df_inactive)
         active = len(df_active)
-        retention = (active / total * 100) if total > 0 else 0
+        retention = (active / total * 100) if total else 0
+        probation = df_active['Employment Status'].str.contains('Probation', case=False).sum() if 'Employment Status' in df_active.columns else 0
         
-        probation = 0
-        if 'Employment Status' in df_active.columns:
-            probation = df_active['Employment Status'].astype(str).str.contains('Probation', case=False).sum()
-
-        # Scorecards
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Headcount", total)
-        c2.metric("Active Employees", active)
-        c3.metric("Retention Rate", f"{retention:.1f}%")
-        c4.metric("On Probation", probation, delta="Action Req", delta_color="inverse")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Headcount", total)
+        k2.metric("Active Employees", active, delta=f"{len(df_inactive)} Exited", delta_color="inverse")
+        k3.metric("Retention Rate", f"{retention:.1f}%")
+        k4.metric("On Probation", probation, delta="Review", delta_color="inverse")
         
         st.markdown("---")
         
-        # Charts
-        c_left, c_right = st.columns(2)
-        with c_left:
-            st.subheader("Headcount by Business Unit")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+            st.subheader("Headcount by Venture")
             if 'Business Unit' in df_active.columns:
                 bu_counts = df_active['Business Unit'].value_counts().reset_index()
                 bu_counts.columns = ['Business Unit', 'Count']
-                fig = px.bar(bu_counts, x='Business Unit', y='Count', color='Business Unit', text='Count')
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with c_right:
-            st.subheader("Leave Utilization (Top 5)")
-            if not df_leave.empty and 'Total Availed' in df_leave.columns:
-                top_leaves = df_leave.sort_values('Total Availed', ascending=False).head(5)
-                fig_leave = px.bar(top_leaves, x='Total Availed', y='Employee Name', orientation='h')
-                st.plotly_chart(fig_leave, use_container_width=True)
-    else:
-        st.warning("Data not loaded. Please ensure Excel files are in the folder.")
+                fig = px.bar(bu_counts, x='Business Unit', y='Count', color='Business Unit', text='Count', 
+                             color_discrete_sequence=px.colors.qualitative.Prism)
+                fig.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR), showlegend=False)
+                
+                selected = st.plotly_chart(fig, use_container_width=True, on_select="rerun")
+                
+                if selected and selected['selection']['points']:
+                    clicked = selected['selection']['points'][0]['x']
+                    st.success(f"Drilling down: **{clicked}**")
+                    st.dataframe(df_active[df_active['Business Unit'] == clicked][['Name', 'Designation', 'Reporting To']], use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 5. MODULE: LEAVE MANAGEMENT (Req 14)
-# -----------------------------------------------------------------------------
-elif menu == "Leave Management":
-    st.title("📅 Leave Management System")
+        with c2:
+            st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+            st.subheader("Performance Pulse")
+            if not df_perf.empty:
+                cat_counts = df_perf['Category'].value_counts().reset_index()
+                cat_counts.columns = ['Category', 'Count']
+                fig = px.pie(cat_counts, names='Category', values='Count', hole=0.6,
+                             color='Category', color_discrete_map={'High Performer': '#2ECC71', 'Average': '#F1C40F', 'Low Performer': '#E74C3C'})
+                fig.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR), margin=dict(t=0, b=0, l=0, r=0), showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+# --- RECRUITMENT ---
+elif menu == "Recruitment Pipeline":
+    c1, c2 = st.columns([3, 1])
+    with c1: st.title("Talent Acquisition")
+    with c2: 
+        if lottie_hiring: st_lottie(lottie_hiring, height=90, key="hire")
     
-    if not df_leave.empty:
-        total_leaves = df_leave['Total Availed'].sum()
-        avg_leaves = df_leave['Total Availed'].mean()
-        
-        m1, m2 = st.columns(2)
-        m1.metric("Total Leaves Availed (YTD)", f"{total_leaves:.0f}")
-        m2.metric("Avg Leaves per Employee", f"{avg_leaves:.1f}")
+    if not df_rec.empty:
+        open_pos = len(df_rec) - df_rec[df_rec['Funnel Stage'] == 'Hired'].shape[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Open Requisitions", open_pos)
+        c2.metric("Total Pipeline", len(df_rec))
+        c3.metric("Closed/Hired", len(df_rec) - open_pos)
         
         st.markdown("---")
+        st.subheader("Interactive Hiring Funnel")
         
-        # Balance Table Logic
-        st.subheader("Employee Leave Balances")
-        # Identify balance columns (ending in .2)
-        balance_map = {}
-        for col in df_leave.columns:
-            if str(col).endswith('.2'):
-                clean_name = str(col).replace('.2', '') + " (Bal)"
-                balance_map[col] = clean_name
+        counts = df_rec['Funnel Stage'].value_counts().reset_index()
+        counts.columns = ['Stage', 'Count']
+        order = ['Applied', 'Shortlisted', 'Interview', 'Offer Extended', 'Hired']
+        counts['Stage'] = pd.Categorical(counts['Stage'], categories=order, ordered=True)
+        counts = counts.sort_values('Stage')
         
-        base_cols = ['Employee Name', 'Designation', 'Total Availed']
-        valid_base = [c for c in base_cols if c in df_leave.columns]
-        cols_to_show = valid_base + list(balance_map.keys())
+        fig = px.funnel(counts, x='Count', y='Stage', color='Stage', color_discrete_sequence=px.colors.qualitative.Safe)
+        fig.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR))
         
-        df_disp = df_leave[cols_to_show].rename(columns=balance_map)
+        sel = st.plotly_chart(fig, use_container_width=True, on_select="rerun")
         
-        # Search
-        search = st.text_input("Search Employee:", placeholder="Name...")
-        if search:
-            mask = df_disp.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
-            df_disp = df_disp[mask]
+        stage = None
+        if sel and sel['selection']['points']:
+            stage = sel['selection']['points'][0]['y']
             
-        st.dataframe(df_disp, use_container_width=True, hide_index=True)
-        
-        # Leave Type Pie Chart
-        st.markdown("### Leave Type Breakdown")
-        type_sums = {}
-        for col in df_leave.columns:
-            if str(col).endswith('.1'): # .1 signifies 'Availed' in summary sheet
-                l_type = str(col).replace('.1', '')
-                type_sums[l_type] = df_leave[col].apply(pd.to_numeric, errors='coerce').sum()
-        
-        if type_sums:
-            df_types = pd.DataFrame(list(type_sums.items()), columns=['Type', 'Count'])
-            fig_types = px.pie(df_types, values='Count', names='Type', hole=0.4)
-            st.plotly_chart(fig_types, use_container_width=True)
-    else:
-        st.warning("Leave data not found.")
+        st.markdown("### 📋 Candidate Details")
+        if stage:
+            st.info(f"Showing details for: **{stage}**")
+            st.dataframe(df_rec[df_rec['Funnel Stage'] == stage][['BU', 'Position', 'Request by', 'Status']], use_container_width=True)
+        else:
+            st.dataframe(df_rec[['BU', 'Position', 'Funnel Stage', 'Status']], use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# 6. MODULE: ORGANIZATION STRUCTURE (Req 13)
-# -----------------------------------------------------------------------------
-elif menu == "Organization Structure":
-    st.title("🏢 Organization Hierarchy")
+# --- EMPLOYEE MOVEMENT (SCROLLABLE & INTERACTIVE) ---
+elif menu == "Employee Movement":
+    c1, c2 = st.columns([3, 1])
+    with c1: st.title("Workforce Dynamics")
+    with c2: 
+        if lottie_move: st_lottie(lottie_move, height=100, key="move")
+
+    # 1. DATA PREP
+    now = datetime.now()
     
+    # A. New Joiners (Current Month)
+    joiners_df = pd.DataFrame()
+    if not df_active.empty and 'Joining Date' in df_active.columns:
+        joiners_df = df_active[
+            (df_active['Joining Date'].dt.month == now.month) & 
+            (df_active['Joining Date'].dt.year == now.year)
+        ].copy()
+        joiners_df['count'] = 1
+
+    # B. Leavers (ALL records)
+    leavers_df = df_inactive.copy() if not df_inactive.empty else pd.DataFrame()
+    if not leavers_df.empty: 
+        leavers_df['count'] = 1
+        leavers_df = leavers_df.sort_values('Exit Date', ascending=False) # Recent first
+
+    # C. Trend Data (Monthly Summary)
+    trend_df = pd.DataFrame()
+    if not df_inactive.empty and 'Exit Date' in df_inactive.columns:
+        df_inactive['ExitMonth'] = df_inactive['Exit Date'].dt.strftime('%Y-%m')
+        trend_df = df_inactive.groupby('ExitMonth').size().reset_index(name='Exits')
+        trend_df = trend_df.sort_values('ExitMonth')
+
+    # 2. KPI METRICS
+    k1, k2 = st.columns(2)
+    k1.metric(f"New Joiners ({now.strftime('%B')})", len(joiners_df), delta="Monthly Inflow")
+    k2.metric("Total Attrition (YTD)", len(df_inactive), delta="Total Exits", delta_color="inverse")
+
+    st.markdown("---")
+
+    # 3. INTERACTIVE SECTION WITH SCROLLABLE CHARTS
+    col_left, col_right = st.columns([1, 1])
+
+    # === LEFT: NEW JOINERS ===
+    with col_left:
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.subheader(f"✨ New Joiners ({len(joiners_df)})")
+        
+        # POP-UP / DETAIL AREA FOR JOINERS (Place ABOVE the scrollable chart for visibility)
+        st.markdown("### 🔍 Details")
+        detail_placeholder_join = st.empty()
+        detail_placeholder_join.caption("👈 Click on a name below to see their Join Date & Manager")
+
+        st.markdown("---") # Separator
+
+        # SCROLLABLE CHART CONTAINER
+        with st.container(height=400):
+            if not joiners_df.empty:
+                # Dynamic Height: 40px per person so it scrolls
+                h_join = max(300, len(joiners_df) * 40)
+                
+                fig_join = px.bar(joiners_df, x='count', y='Name', orientation='h', 
+                                  text='Name', color_discrete_sequence=[SECONDARY])
+                fig_join.update_layout(
+                    plot_bgcolor="white", paper_bgcolor="white", 
+                    font=dict(color=TEXT_COLOR),
+                    yaxis={'visible': True, 'showticklabels': False, 'title': ''},
+                    xaxis={'visible': False},
+                    showlegend=False,
+                    height=h_join,
+                    margin=dict(l=0, r=0, t=0, b=0)
+                )
+                fig_join.update_traces(textposition='inside', insidetextanchor='start')
+                
+                # INTERACTIVITY
+                sel_join = st.plotly_chart(fig_join, use_container_width=True, on_select="rerun")
+                
+                # UPDATE POP-UP
+                if sel_join and sel_join['selection']['points']:
+                    clicked_name = sel_join['selection']['points'][0]['y']
+                    person = joiners_df[joiners_df['Name'] == clicked_name].iloc[0]
+                    with detail_placeholder_join.container():
+                        st.info(f"👤 **{clicked_name}**")
+                        st.write(f"📅 Joined: **{person['Joining Date'].strftime('%d %b %Y')}**")
+                        st.write(f"👔 Reports To: **{person.get('Reporting To', 'N/A')}**")
+            else:
+                st.info("No new joiners this month.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # === RIGHT: LEAVING EMPLOYEES (ALL) ===
+    with col_right:
+        st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+        st.subheader(f"👋 Leaving Employees ({len(leavers_df)})")
+        
+        # POP-UP / DETAIL AREA FOR LEAVERS
+        st.markdown("### 🔍 Details")
+        detail_placeholder_leave = st.empty()
+        detail_placeholder_leave.caption("👈 Click on a name below to reveal the reason")
+
+        st.markdown("---") # Separator
+
+        # SCROLLABLE CHART CONTAINER
+        with st.container(height=400):
+            if not leavers_df.empty:
+                # Dynamic Height: Ensure ALL names fit by calculating height per person
+                h_leave = max(300, len(leavers_df) * 40)
+                
+                fig_leave = px.bar(leavers_df, x='count', y='Name', orientation='h',
+                                   text='Name', color_discrete_sequence=[DANGER])
+                fig_leave.update_layout(
+                    plot_bgcolor="white", paper_bgcolor="white", 
+                    font=dict(color=TEXT_COLOR),
+                    yaxis={'visible': True, 'showticklabels': False, 'title': ''}, # Hide Y axis text to save width
+                    xaxis={'visible': False},
+                    showlegend=False,
+                    height=h_leave, # TALL HEIGHT to fit everyone
+                    margin=dict(l=0, r=0, t=0, b=0)
+                )
+                fig_leave.update_traces(textposition='inside', insidetextanchor='start')
+                
+                # INTERACTIVITY
+                sel_leave = st.plotly_chart(fig_leave, use_container_width=True, on_select="rerun")
+                
+                # UPDATE POP-UP
+                if sel_leave and sel_leave['selection']['points']:
+                    clicked_leaver = sel_leave['selection']['points'][0]['y']
+                    leaver = leavers_df[leavers_df['Name'] == clicked_leaver].iloc[0]
+                    with detail_placeholder_leave.container():
+                        st.error(f"👤 **{clicked_leaver}**")
+                        reason = leaver.get('Reason', 'Not Mentioned')
+                        st.write(f"❓ Reason: **{reason}**")
+                        exit_d = leaver.get('Exit Date', pd.NaT)
+                        d_str = exit_d.strftime('%d %b %Y') if pd.notnull(exit_d) else "N/A"
+                        st.write(f"📅 Exit Date: **{d_str}**")
+            else:
+                st.success("No attrition records found.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # === BOTTOM: SUMMARY CHART ===
+    st.markdown('<div class="chart-box">', unsafe_allow_html=True)
+    st.subheader("📉 Attrition Overview (Monthly Trend)")
+    if not trend_df.empty:
+        fig_trend = px.area(trend_df, x='ExitMonth', y='Exits', title="Monthly Exits", markers=True)
+        fig_trend.update_traces(line_color=DANGER, fillcolor="rgba(231, 76, 60, 0.2)")
+        fig_trend.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR))
+        st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("Not enough data for trend analysis.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- ORG STRUCTURE ---
+elif menu == "Organization Structure":
+    st.title("🏢 Interactive Hierarchy")
     if not df_active.empty:
-        st.subheader("Interactive Hierarchy")
-        # Path: BU -> Dept -> Designation
+        st.info("Click segments to drill down.")
         path = []
         if 'Business Unit' in df_active.columns: path.append('Business Unit')
         if 'Department' in df_active.columns: path.append('Department')
@@ -297,174 +437,58 @@ elif menu == "Organization Structure":
         
         if path:
             df_tree = df_active.groupby(path).size().reset_index(name='Count')
-            fig = px.sunburst(df_tree, path=path, values='Count', height=600)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("### Reporting Matrix")
-        # Safe column selection
-        cols = ['Name', 'Designation', 'Business Unit', 'Reporting To']
-        valid = [c for c in cols if c in df_active.columns]
-        
-        bu_filter = st.multiselect("Filter by Business Unit", options=df_active['Business Unit'].unique())
-        df_show = df_active[valid]
-        if bu_filter:
-            df_show = df_show[df_show['Business Unit'].isin(bu_filter)]
+            fig = px.sunburst(df_tree, path=path, values='Count', color='Business Unit', height=600)
+            fig.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR))
+            st.plotly_chart(fig, use_container_width=True, on_select="rerun")
             
-        st.dataframe(df_show.sort_values('Reporting To'), use_container_width=True)
+            st.subheader("Reporting Matrix")
+            cols = ['Name', 'Designation', 'Business Unit', 'Reporting To']
+            valid = [c for c in cols if c in df_active.columns]
+            st.dataframe(df_active[valid].sort_values('Reporting To'), use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# 7. MODULE: EMPLOYEE MOVEMENT (Req 11-12)
-# -----------------------------------------------------------------------------
-elif menu == "Employee Movement":
-    st.title("🔄 Employee Movement")
-    
-    if not df_active.empty:
-        # New Joiners Logic
-        max_date = df_active['Joining Date'].max()
-        if pd.notnull(max_date):
-            curr_month = max_date.strftime("%B %Y")
-            new_joiners = df_active[
-                (df_active['Joining Date'].dt.month == max_date.month) & 
-                (df_active['Joining Date'].dt.year == max_date.year)
-            ]
-        else:
-            new_joiners = pd.DataFrame()
-            curr_month = "N/A"
-            
-        m1, m2 = st.columns(2)
-        m1.metric(f"New Joiners ({curr_month})", len(new_joiners), delta="Growth")
-        m2.metric("Total Attrition", len(df_inactive), delta="Exits", delta_color="inverse")
-        
-        st.markdown("---")
-        
-        t1, t2 = st.tabs(["📉 Attrition Analysis", "🆕 New Joiners"])
-        
-        with t1:
-            if not df_inactive.empty:
-                c1, c2 = st.columns(2)
-                with c1: 
-                    if 'Reason' in df_inactive.columns:
-                        fig = px.pie(df_inactive, names='Reason', title="Exit Reasons")
-                        st.plotly_chart(fig, use_container_width=True)
-                with c2:
-                    # Safe select
-                    e_cols = ['Name', 'Designation', 'Exit Date', 'Reason']
-                    v_e = [c for c in e_cols if c in df_inactive.columns]
-                    st.dataframe(df_inactive[v_e])
-                    
-        with t2:
-            # Safe select for joiners
-            j_cols = ['Name', 'Designation', 'Department', 'Joining Date', 'Reporting To']
-            v_j = [c for c in j_cols if c in new_joiners.columns]
-            st.dataframe(new_joiners[v_j], use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# 8. MODULE: RECRUITMENT TRACKING (Req 10)
-# -----------------------------------------------------------------------------
-elif menu == "Recruitment Tracking":
-    st.title("📢 Recruitment Tracker")
-    
-    if not df_rec.empty:
-        closed = df_rec[df_rec['Funnel Stage'] == 'Hired'].shape[0]
-        open_pos = len(df_rec) - closed
-        
-        st.metric("Open Positions", open_pos)
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            counts = df_rec['Funnel Stage'].value_counts().reset_index()
-            counts.columns = ['Stage', 'Count']
-            order = ['Applied/In Process', 'Shortlisted', 'Interview', 'Offer Extended', 'Hired']
-            counts['Stage'] = pd.Categorical(counts['Stage'], categories=order, ordered=True)
-            counts = counts.sort_values('Stage')
-            fig = px.funnel(counts, x='Count', y='Stage', title="Hiring Funnel")
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with c2:
-            if 'BU' in df_rec.columns:
-                fig_bu = px.histogram(df_rec[df_rec['Funnel Stage']!='Hired'], y='BU', title="Openings by Dept")
-                st.plotly_chart(fig_bu, use_container_width=True)
-
-        st.dataframe(df_rec[['BU', 'Position', 'Status', 'Funnel Stage']], use_container_width=True)
-    else:
-        st.warning("Recruitment data not found.")
-
-# -----------------------------------------------------------------------------
-# 9. MODULE: PERFORMANCE MANAGEMENT (Req 7-9)
-# -----------------------------------------------------------------------------
-elif menu == "Performance Management":
-    st.title("🚀 Performance Appraisals")
-    
-    if not df_perf.empty:
-        avg = df_perf['Total Points (Out of 100)'].mean()
-        high = len(df_perf[df_perf['Category'] == 'High Performer'])
-        
-        col1, col2 = st.columns(2)
-        col1.metric("Avg Score", f"{avg:.1f}")
-        col2.metric("High Performers", high)
-        
-        st.markdown("### Appraisal Data")
-        cat = st.selectbox("Filter Category", ["All", "High Performer", "Average", "Low Performer"])
-        df_show = df_perf
-        if cat != "All":
-            df_show = df_show[df_show['Category'] == cat]
-            
-        # Safe Select
-        p_cols = ['Name', 'Total Points (Out of 100)', 'Category', 'Evaluated By']
-        v_p = [c for c in p_cols if c in df_perf.columns]
-        st.dataframe(df_show[v_p], use_container_width=True)
-    else:
-        st.warning("Performance data not found.")
-
-# -----------------------------------------------------------------------------
-# 10. MODULE: EMPLOYEE MASTER FILE (Req 5-6)
-# -----------------------------------------------------------------------------
-elif menu == "Employee Master File":
-    st.title("📂 Employee Master Database")
-    
-    if not df_active.empty:
-        t1, t2 = st.tabs(["Search", "Probation"])
-        
-        with t1:
-            q = st.text_input("Search Name/ID")
-            # Safe Select
-            m_cols = ['Employee Number', 'Name', 'Designation', 'Department', 'Business Unit', 'Reporting To', 'Joining Date', 'Profiles']
-            v_m = [c for c in m_cols if c in df_active.columns]
-            
-            df_d = df_active[v_m].copy()
-            if 'Profiles' in df_d.columns: 
-                df_d.rename(columns={'Profiles': 'CV Link'}, inplace=True)
-            
-            if q:
-                df_d = df_d[df_d.astype(str).apply(lambda x: x.str.contains(q, case=False)).any(axis=1)]
-            
-            st.dataframe(
-                df_d, 
-                use_container_width=True,
-                column_config={"CV Link": st.column_config.LinkColumn("CV Link", display_text="View CV")}
-            )
-            
-        with t2:
-            if 'Employment Status' in df_active.columns:
-                prob = df_active[df_active['Employment Status'].str.contains('Probation', case=False, na=False)]
-                st.error(f"{len(prob)} Employees on Probation")
-                st.dataframe(prob)
-
-# -----------------------------------------------------------------------------
-# 11. MODULE: POLICIES (Req 9)
-# -----------------------------------------------------------------------------
-elif menu == "Policies & Documentation":
-    st.title("📜 Policies")
-    t1, t2 = st.tabs(["Approved", "Drafts"])
+# --- PERFORMANCE & LEAVE ---
+elif menu == "Performance & Leave":
+    st.title("🚀 Performance & Leave Analytics")
+    t1, t2 = st.tabs(["Performance", "Leave"])
     
     with t1:
-        st.info("Effective immediately")
-        with st.expander("Annual Increment Policy"): st.write("Eligibility: 12 Months service.")
-        with st.expander("Recruitment Policy"): st.write("KPI: Time to hire < 30 days.")
-        with st.expander("Leave Policy"): st.write("WFH: Allowed once a week.")
-        with st.expander("Code of Conduct"): st.write("Zero Tolerance Policy.")
-    
+        if not df_perf.empty:
+            avg = df_perf['Total Points (Out of 100)'].mean()
+            c1, c2 = st.columns(2)
+            c1.metric("Avg Score", f"{avg:.1f}")
+            c2.metric("High Performers", len(df_perf[df_perf['Category'] == 'High Performer']))
+            
+            st.subheader("Performance Distribution")
+            cat_counts = df_perf['Category'].value_counts().reset_index()
+            cat_counts.columns = ['Category', 'Count']
+            fig = px.bar(cat_counts, x='Category', y='Count', color='Category', 
+                         color_discrete_map={'High Performer': '#2ECC71', 'Average': '#F1C40F', 'Low Performer': '#E74C3C'})
+            fig.update_layout(plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT_COLOR))
+            
+            sel = st.plotly_chart(fig, use_container_width=True, on_select="rerun")
+            
+            cat = None
+            if sel and sel['selection']['points']:
+                cat = sel['selection']['points'][0]['x']
+                
+            if cat:
+                st.dataframe(df_perf[df_perf['Category'] == cat], use_container_width=True)
+            else:
+                st.dataframe(df_perf, use_container_width=True)
+
     with t2:
-        st.warning("Under Review")
-        st.write("- AI Usage Policy")
-        st.write("- Wellness Program")
+        if not df_leave.empty:
+            st.metric("Total Leaves (YTD)", f"{df_leave['Total Availed'].sum():.0f}")
+            
+            st.subheader("Leave Balances")
+            bal_cols = [c for c in df_leave.columns if str(c).endswith('.2')]
+            valid = ['Employee Name', 'Total Availed'] + bal_cols
+            st.dataframe(df_leave[[c for c in valid if c in df_leave.columns]], use_container_width=True)
+
+# --- POLICIES ---
+elif menu == "Policies & Docs":
+    st.title("📜 Corporate Policies")
+    with st.expander("📄 Annual Increment Policy"):
+        st.info("Eligibility: Min 12 months service | Criteria: KPI & Profitability")
+    with st.expander("📄 Recruitment Policy"):
+        st.info("SLA: 30 Days to Hire | Process: Requisition > Panel > Offer")
